@@ -57,6 +57,7 @@ import { execFile, spawn } from 'child_process';
 import { sanitizeError, sanitizePath } from '../../utils/sanitize.js';
 import { getWorkspaceRoot, isPathWithinRoot } from '../../utils/workspace-guard.js';
 import { getSessionKeyFromCtx, parseSessionKey } from '../../utils/session-key.js';
+import { listNativeSessions, findSessionOnDisk, findActiveProcess, samePath } from '../../utils/claude-sessions.js';
 
 // Helper for consistent MarkdownV2 replies
 async function replyMd(ctx: Context, text: string): Promise<void> {
@@ -429,6 +430,8 @@ export async function handleProjectCallback(ctx: Context): Promise<void> {
     if (s?.claudeSessionId) {
       await replyMd(ctx, resumeCommandMessage(s.claudeSessionId));
     }
+
+    await maybeOfferResume(ctx, sessionKey, state.current);
     return;
   }
 
@@ -698,6 +701,8 @@ export async function handleProject(ctx: Context): Promise<void> {
   if (s?.claudeSessionId) {
     await replyMd(ctx, resumeCommandMessage(s.claudeSessionId));
   }
+
+  await maybeOfferResume(ctx, sessionKey, projectPath);
 }
 
 export async function handleNewProject(ctx: Context): Promise<void> {
@@ -735,6 +740,8 @@ export async function handleNewProject(ctx: Context): Promise<void> {
   if (s?.claudeSessionId) {
     await replyMd(ctx, resumeCommandMessage(s.claudeSessionId));
   }
+
+  await maybeOfferResume(ctx, sessionKey, projectPath);
 }
 
 function listProjects(): string[] {
@@ -1553,38 +1560,160 @@ export async function handleExplore(ctx: Context): Promise<void> {
   }
 }
 
+/** A short, single-line label for a session button (plain text — no MarkdownV2). */
+function sessionButtonLabel(text: string | undefined, fallback: string, max: number = 40): string {
+  const cleaned = (text || '').replace(/\s+/g, ' ').trim();
+  const base = cleaned || fallback;
+  return base.length > max ? `${base.slice(0, max - 1)}…` : base;
+}
+
+interface UnifiedResumeEntry {
+  callbackData: string; // resume:<conversationId> (bot) or teleportin:<sessionId> (native)
+  label: string;        // plain-text button label
+  when: Date;
+}
+
+/**
+ * Merge the bot's session index with native ~/.claude sessions for the current
+ * project directory, deduped by Claude session UUID (registry entries win — they
+ * carry a conversationId + preview). Newest first.
+ */
+function buildUnifiedResumeEntries(sessionKey: string): UnifiedResumeEntry[] {
+  const session = sessionManager.getSession(sessionKey);
+  const cwd = session?.workingDirectory;
+  const { chatId } = parseSessionKey(sessionKey);
+
+  const byId = new Map<string, UnifiedResumeEntry>();
+
+  // Bot-registry sessions (must have a claudeSessionId), scoped to current cwd.
+  const history = sessionManager.getSessionHistory(sessionKey, 20);
+  for (const entry of history) {
+    if (!entry.claudeSessionId) continue;
+    if (cwd && !samePath(entry.projectPath, cwd)) continue;
+    byId.set(entry.claudeSessionId, {
+      callbackData: `resume:${entry.conversationId}`,
+      label: `💬 ${sessionButtonLabel(entry.lastMessagePreview, entry.projectName)} · ${formatTimeAgo(new Date(entry.lastActivity))}`,
+      when: new Date(entry.lastActivity),
+    });
+  }
+
+  // Native on-disk sessions for this directory (Claude provider only).
+  if (cwd && getActiveProviderName(chatId) !== 'opencode') {
+    for (const native of listNativeSessions({ cwd, limit: 10 })) {
+      if (byId.has(native.sessionId)) continue;
+      byId.set(native.sessionId, {
+        callbackData: `teleportin:${native.sessionId}`,
+        label: `🖥️ ${sessionButtonLabel(native.firstPrompt, native.projectName)} · ${formatTimeAgo(native.modifiedAt)}`,
+        when: native.modifiedAt,
+      });
+    }
+  }
+
+  return [...byId.values()].sort((a, b) => b.when.getTime() - a.when.getTime()).slice(0, 8);
+}
+
 export async function handleResume(ctx: Context): Promise<void> {
   const keyInfo = getSessionKeyFromCtx(ctx);
   if (!keyInfo) return;
   const { sessionKey } = keyInfo;
 
-  const history = sessionManager.getSessionHistory(sessionKey, 10);
-  // Only show sessions that actually have a Claude session (were chatted in)
-  const resumable = history.filter((entry) => entry.claudeSessionId);
+  // Optional argument: `/resume <sessionId>` imports a specific session by id —
+  // e.g. one pasted from Claude Desktop/CLI, or from a different project dir that
+  // the picker (current-project only) wouldn't list. No arg → fall through to the picker.
+  const arg = (ctx.message?.text || '').split(' ').slice(1).join(' ').trim();
+  if (arg) {
+    if (!SESSION_ID_RE.test(arg)) {
+      await replyMd(ctx, '⚠️ Invalid session ID format\\.\n\nSession IDs contain only letters, numbers, hyphens, and underscores\\.');
+      return;
+    }
 
-  if (resumable.length === 0) {
-    await replyMd(ctx, 'ℹ️ No resumable sessions found\\.\n\nSessions need at least one Claude response to be resumable\\.\nUse `/project <name>` to start a new session\\.');
+    const diskSession = findSessionOnDisk(arg);
+    if (diskSession) {
+      if (!fs.existsSync(diskSession.workingDirectory)) {
+        await replyMd(ctx, `⚠️ Session found but its working directory no longer exists:\n\`${esc(diskSession.workingDirectory)}\``);
+        return;
+      }
+      importSession(sessionKey, arg, diskSession.workingDirectory);
+      await replyMd(
+        ctx,
+        `▶️ *Session Resumed*\n\n` +
+        `*Project:* \`${esc(diskSession.projectName)}\`\n` +
+        `*Directory:* \`${esc(diskSession.workingDirectory)}\`\n` +
+        `*Session:* \`${esc(arg.substring(0, 8))}\\.\\.\\.\`\n\n` +
+        `_Send a message to continue this session in Telegram\\._`
+      );
+      return;
+    }
+
+    // Not on disk — fall back to the current project directory if one is set.
+    const existingSession = sessionManager.getSession(sessionKey);
+    if (existingSession) {
+      importSession(sessionKey, arg, existingSession.workingDirectory);
+      await replyMd(
+        ctx,
+        `▶️ *Session Resumed*\n\n` +
+        `*Project:* \`${esc(path.basename(existingSession.workingDirectory))}\`\n` +
+        `*Session:* \`${esc(arg.substring(0, 8))}\\.\\.\\.\`\n\n` +
+        `⚠️ _Session not found on disk — using current project directory\\._\n` +
+        `_Send a message to continue this session\\._`
+      );
+      return;
+    }
+
+    await replyMd(
+      ctx,
+      '⚠️ Session not found on disk and no project is set\\.\n\n' +
+      'Use `/project <path>` first, then try `/resume <sessionId>` again\\.'
+    );
     return;
   }
 
-  const keyboard = resumable.map((entry) => {
-    const date = new Date(entry.lastActivity);
-    const timeAgo = formatTimeAgo(date);
+  const session = sessionManager.getSession(sessionKey);
 
-    return [
+  // No project set yet — fall back to the cross-project bot-registry list so a
+  // fresh bot (e.g. after restart) can still restore any past session.
+  if (!session) {
+    const history = sessionManager.getSessionHistory(sessionKey, 10);
+    const resumable = history.filter((entry) => entry.claudeSessionId);
+
+    if (resumable.length === 0) {
+      await replyMd(ctx, 'ℹ️ No resumable sessions found\\.\n\nSessions need at least one Claude response to be resumable\\.\nUse `/project <name>` to start a new session\\.');
+      return;
+    }
+
+    const keyboard = resumable.map((entry) => [
       {
-        text: `${entry.projectName} (${timeAgo})`,
+        text: `${entry.projectName} (${formatTimeAgo(new Date(entry.lastActivity))})`,
         callback_data: `resume:${entry.conversationId}`,
       },
-    ];
-  });
+    ]);
 
-  await ctx.reply('📜 *Recent Sessions*\n\nSelect a session to resume:', {
-    parse_mode: 'MarkdownV2',
-    reply_markup: {
-      inline_keyboard: keyboard,
-    },
-  });
+    await ctx.reply('📜 *Recent Sessions*\n\nSelect a session to resume:', {
+      parse_mode: 'MarkdownV2',
+      reply_markup: { inline_keyboard: keyboard },
+    });
+    return;
+  }
+
+  // Project set — show a unified, deduped list of bot + terminal sessions for it.
+  const entries = buildUnifiedResumeEntries(sessionKey);
+
+  if (entries.length === 0) {
+    await replyMd(ctx, 'ℹ️ No resumable sessions found for this project\\.\n\nSend a message to start one\\.');
+    return;
+  }
+
+  const keyboard = entries.map((entry) => [
+    { text: entry.label, callback_data: entry.callbackData },
+  ]);
+
+  await ctx.reply(
+    `📜 *Sessions for ${esc(path.basename(session.workingDirectory))}*\n\n💬 Telegram · 🖥️ terminal/CLI\n\nSelect a session to resume:`,
+    {
+      parse_mode: 'MarkdownV2',
+      reply_markup: { inline_keyboard: keyboard },
+    }
+  );
 }
 
 export async function handleResumeCallback(ctx: Context): Promise<void> {
@@ -1640,6 +1769,56 @@ export async function handleContinue(ctx: Context): Promise<void> {
   // Send session ID as separate message for easy copying
   if (session.claudeSessionId) {
     await replyMd(ctx, resumeCommandMessage(session.claudeSessionId));
+  }
+}
+
+/**
+ * After switching into a project, offer to resume any native ~/.claude sessions
+ * that already exist for that directory (bot- or terminal-created). Silent no-op
+ * when there are none, or when the OpenCode provider is active.
+ */
+export async function maybeOfferResume(
+  ctx: Context,
+  sessionKey: string,
+  workingDirectory: string
+): Promise<void> {
+  const { chatId } = parseSessionKey(sessionKey);
+  if (getActiveProviderName(chatId) === 'opencode') return;
+
+  const sessions = listNativeSessions({ cwd: workingDirectory, limit: 4 });
+  if (sessions.length === 0) return;
+
+  const keyboard: Array<Array<{ text: string; callback_data: string }>> = [
+    [{
+      text: `▶️ Resume latest (${formatTimeAgo(sessions[0].modifiedAt)})`,
+      callback_data: `teleportin:${sessions[0].sessionId}`,
+    }],
+  ];
+  for (const s of sessions.slice(1)) {
+    keyboard.push([{
+      text: `🖥️ ${sessionButtonLabel(s.firstPrompt, s.projectName, 32)} · ${formatTimeAgo(s.modifiedAt)}`,
+      callback_data: `teleportin:${s.sessionId}`,
+    }]);
+  }
+  keyboard.push([{ text: '🆕 Start new', callback_data: 'resumenew:' }]);
+
+  await ctx.reply(
+    '🔁 *Existing sessions found for this project*\n\nResume where you left off \\(terminal or Telegram\\), or start fresh:',
+    {
+      parse_mode: 'MarkdownV2',
+      reply_markup: { inline_keyboard: keyboard },
+    }
+  );
+}
+
+export async function handleResumeNewCallback(ctx: Context): Promise<void> {
+  const data = ctx.callbackQuery?.data;
+  if (!data || !data.startsWith('resumenew:')) return;
+  await ctx.answerCallbackQuery({ text: 'Starting fresh' });
+  try {
+    await ctx.editMessageText('🆕 New session — send a message to begin.');
+  } catch {
+    /* message may be uneditable — ignore */
   }
 }
 
@@ -1730,9 +1909,99 @@ export async function handleSessions(ctx: Context): Promise<void> {
     }
   }
 
+  // On-disk native sessions for the current project (bot + terminal), excluding
+  // ones already tracked in the bot history above.
+  if (currentSession && getActiveProviderName(parseSessionKey(sessionKey).chatId) !== 'opencode') {
+    const knownIds = new Set(history.map((e) => e.claudeSessionId).filter(Boolean));
+    const native = listNativeSessions({ cwd: currentSession.workingDirectory, limit: 8 })
+      .filter((s) => !knownIds.has(s.sessionId));
+    if (native.length > 0) {
+      message += '\n*On disk \\(this project\\):*\n';
+      for (const s of native) {
+        const label = (s.firstPrompt || s.projectName).replace(/\s+/g, ' ').trim().slice(0, 60);
+        message += `🖥️ \`${esc(label)}\` \\(${esc(formatTimeAgo(s.modifiedAt))}\\)\n`;
+      }
+    }
+  }
+
   message += '\n_Use `/resume` to switch sessions or `/continue` to resume the last one\\._';
 
   await replyMd(ctx, message);
+}
+
+/**
+ * `/sync` — reconcile with the terminal. Re-points the bot to the newest native
+ * session for the current project (handles the terminal continuing OR forking to
+ * a new id) and reports whether a terminal currently has it open.
+ */
+export async function handleSync(ctx: Context): Promise<void> {
+  const keyInfo = getSessionKeyFromCtx(ctx);
+  if (!keyInfo) return;
+  const { sessionKey } = keyInfo;
+  const { chatId } = parseSessionKey(sessionKey);
+
+  if (getActiveProviderName(chatId) === 'opencode') {
+    await replyMd(ctx, 'ℹ️ `/sync` is not available for the OpenCode provider\\.');
+    return;
+  }
+
+  const session = sessionManager.getSession(sessionKey);
+  if (!session) {
+    await replyMd(ctx, '⚠️ No project set\\.\n\nUse `/project <path>` to open a project first, then `/sync`\\.');
+    return;
+  }
+
+  const cwd = session.workingDirectory;
+  const candidates = listNativeSessions({ cwd, limit: 5 });
+
+  if (candidates.length === 0) {
+    await replyMd(ctx, `ℹ️ No sessions found on disk for *${esc(path.basename(cwd))}*\\.\n\nSend a message to start one\\.`);
+    return;
+  }
+
+  // Newest session for this project that isn't already being driven by another
+  // chat/topic (so concurrent chats sharing a project don't hijack each other).
+  const otherOwned = sessionManager.getClaudeSessionIdsForOtherKeys(sessionKey);
+  const newest = candidates.find(
+    (c) => c.sessionId === session.claudeSessionId || !otherOwned.has(c.sessionId)
+  );
+
+  if (!newest) {
+    await replyMd(ctx, `ℹ️ The recent sessions for *${esc(path.basename(cwd))}* are in use by other chats\\.\n\nStaying on your current session\\.`);
+    return;
+  }
+
+  const wasAttached = session.claudeSessionId;
+  const rePointed = newest.sessionId !== wasAttached;
+  if (rePointed) {
+    // Re-attach to the newest session for this project. Dir is unchanged, so
+    // setWorkingDirectory won't clear the id before we set it.
+    clearConversation(sessionKey);
+    sessionManager.setWorkingDirectory(sessionKey, cwd);
+    sessionManager.setClaudeSessionId(sessionKey, newest.sessionId);
+  }
+
+  // Presence: has an interactive terminal recently used this session? (These
+  // records track last activity, not a live heartbeat, so we phrase it as such.)
+  const proc = findActiveProcess({ sessionId: newest.sessionId });
+  const terminalRecent = !!proc && (proc.entrypoint === 'cli' || proc.kind === 'interactive');
+
+  let msg = '🔄 *Synced to latest session*\n\n';
+  msg += `*Project:* \`${esc(path.basename(cwd))}\`\n`;
+  msg += `*Session:* \`${esc(newest.sessionId.substring(0, 8))}\\.\\.\\.\` \\(${esc(formatTimeAgo(newest.modifiedAt))}\\)\n`;
+  if (rePointed) {
+    msg += wasAttached
+      ? `\n↪️ Re\\-pointed from \`${esc(wasAttached.substring(0, 8))}\\.\\.\\.\` to the newest session\\.`
+      : '\n↪️ Attached to the newest session for this project\\.';
+  } else {
+    msg += '\n✅ Already on the newest session\\.';
+  }
+  if (terminalRecent && proc) {
+    msg += `\n\n🖥️ A terminal used this session ${esc(formatTimeAgo(new Date(proc.updatedAt)))}\\. If it's still open, avoid driving both at once — run \`/sync\` there to pull these turns\\.`;
+  }
+  msg += "\n\n_The terminal's latest turns are already in context here\\. To pull Telegram turns into a live terminal, run `/sync` there\\._";
+
+  await replyMd(ctx, msg);
 }
 
 export async function handleTeleport(ctx: Context): Promise<void> {
@@ -1773,9 +2042,56 @@ Copy and run in your terminal:
 ${esc(command)}
 \`\`\`
 
-_Both Telegram and terminal can continue independently \\(forked session\\)\\._`;
+_Same continuous thread — the terminal and Telegram share one session, so changes on either side continue the same conversation\\. \\(Avoid driving both at the exact same time\\.\\)_`;
 
   await replyMd(ctx, message);
+}
+
+/**
+ * Core logic for importing an external Claude session into the Telegram bot.
+ */
+function importSession(
+  sessionKey: string,
+  sessionId: string,
+  workingDirectory: string,
+): void {
+  clearConversation(sessionKey);
+  // setWorkingDirectory clears claudeSessionId, so setClaudeSessionId MUST come after
+  sessionManager.setWorkingDirectory(sessionKey, workingDirectory);
+  sessionManager.setClaudeSessionId(sessionKey, sessionId);
+}
+
+export async function handleTeleportInCallback(ctx: Context): Promise<void> {
+  const keyInfo = getSessionKeyFromCtx(ctx);
+  if (!keyInfo) return;
+  const { sessionKey } = keyInfo;
+
+  const data = ctx.callbackQuery?.data;
+  if (!data || !data.startsWith('teleportin:')) return;
+
+  const sessionId = data.replace('teleportin:', '');
+  if (!SESSION_ID_RE.test(sessionId)) {
+    await ctx.answerCallbackQuery({ text: 'Invalid session ID' });
+    return;
+  }
+
+  const diskSession = findSessionOnDisk(sessionId);
+  if (!diskSession || !fs.existsSync(diskSession.workingDirectory)) {
+    await ctx.answerCallbackQuery({ text: 'Session directory not found' });
+    return;
+  }
+
+  importSession(sessionKey, sessionId, diskSession.workingDirectory);
+
+  await ctx.answerCallbackQuery({ text: 'Session imported!' });
+  await ctx.editMessageText(
+    `🛬 *Session Imported*\n\n` +
+    `*Project:* \`${esc(diskSession.projectName)}\`\n` +
+    `*Directory:* \`${esc(diskSession.workingDirectory)}\`\n` +
+    `*Session:* \`${esc(sessionId.substring(0, 8))}\\.\\.\\.\`\n\n` +
+    `_Send a message to continue this session in Telegram\\._`,
+    { parse_mode: 'MarkdownV2' }
+  );
 }
 
 function formatTimeAgo(date: Date): string {

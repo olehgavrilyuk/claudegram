@@ -59,10 +59,11 @@ export function getAvailableCommands(): string {
       commands: [
         '• `/project <path>` \\- Set working directory',
         '• `/newproject <name>` \\- Create a new project',
-        '• `/resume` \\- Pick from recent sessions to resume',
+        '• `/resume` \\- Pick from recent sessions, or `/resume <id>` to import a session by id',
         '• `/continue` \\- Resume most recent session',
         '• `/sessions` \\- List all sessions',
-        '• `/teleport` \\- Move session to terminal \\(forked\\)',
+        '• `/sync` \\- Sync with the terminal \\(pull its latest session\\)',
+        '• `/teleport` \\- Move session to terminal \\(same thread\\)',
         '• `/clear` \\- Clear session and start fresh',
         '• `/status` \\- Show current session info',
       ],

@@ -129,6 +129,21 @@ class SessionManager {
     return sessionHistory.getHistory(sessionKey, limit);
   }
 
+  /**
+   * Claude session IDs currently attached to OTHER chats/topics. Used so a
+   * chat's `/sync` never re-points onto a session another chat is driving
+   * (relevant when two chats happen to share one project directory).
+   */
+  getClaudeSessionIdsForOtherKeys(excludeKey: string): Set<string> {
+    const ids = new Set<string>();
+    for (const [key, session] of this.sessions) {
+      if (key !== excludeKey && session.claudeSessionId) {
+        ids.add(session.claudeSessionId);
+      }
+    }
+    return ids;
+  }
+
   setClaudeSessionId(sessionKey: string, claudeSessionId: string): void {
     const session = this.sessions.get(sessionKey);
     if (!session) return;

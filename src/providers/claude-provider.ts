@@ -11,8 +11,10 @@ import {
 import type { Provider, AgentOptions, LoopOptions, AgentResponse, AgentUsage, ModelInfo } from './types.js';
 
 const CLAUDE_MODELS: ModelInfo[] = [
-  { id: 'opus', label: 'opus', description: 'Most capable (default)' },
+  { id: 'opus', label: 'opus', description: 'Most capable' },
+  { id: 'opus[1m]', label: 'opus (1M)', description: 'Opus with 1M-token context — for large/resumed sessions' },
   { id: 'sonnet', label: 'sonnet', description: 'Balanced' },
+  { id: 'sonnet[1m]', label: 'sonnet (1M)', description: 'Sonnet with 1M-token context' },
   { id: 'haiku', label: 'haiku', description: 'Fast & light' },
 ];
 

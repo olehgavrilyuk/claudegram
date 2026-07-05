@@ -38,9 +38,11 @@ This is not a simple API wrapper. It's the real Claude Code agent with tool acce
 ### Agent Core
 - Full Claude Code with tool access (Bash, Read, Write, Edit, Glob, Grep)
 - Session resume across messages — Claude remembers everything
+- Native `~/.claude` sessions — bot and terminal share one continuous thread; switch back and forth seamlessly
+- `/sync` on both sides — pull the other side's latest turns on demand (Telegram ⇄ terminal)
 - Project-based working directories
 - Streaming responses with live-updating messages
-- Model picker: Sonnet · Opus · Haiku
+- Model picker: Sonnet · Opus · Haiku, plus 1M-context `opus[1m]` / `sonnet[1m]` — or inherit your terminal's `settings.json` model so resumed sessions don't overflow
 - Plan mode, explore mode, loop mode
 
 ### Reddit Integration
@@ -74,7 +76,7 @@ This is not a simple API wrapper. It's the real Claude Code agent with tool acce
 - Telegraph Instant View for long responses & tables
 - Smart chunking that preserves code blocks
 - ForceReply interactive prompts for multi-step commands
-- `/teleport` — fork session to terminal for continued work
+- `/teleport` — continue your session in the terminal (same thread); `/resume` — pull a terminal session into Telegram
 - Inline keyboards for settings (model, mode, TTS, clear)
 
 ### Terminal UI
@@ -88,8 +90,9 @@ This is not a simple API wrapper. It's the real Claude Code agent with tool acce
 - No explicit commands needed for common tasks
 
 ### Forum Topic Sessions
-- Each forum topic runs as an independent session
-- Work on multiple projects in parallel across topics
+- Each chat/forum topic runs as an independent session
+- Work on multiple projects in parallel — processed concurrently
+- Each topic keeps its own project, session, and terminal `/sync`
 
 ### Image Uploads
 - Send photos or image docs in chat
@@ -99,6 +102,49 @@ This is not a simple API wrapper. It's the real Claude Code agent with tool acce
 </td>
 </tr>
 </table>
+
+---
+
+## Sessions: Bot ⇄ Terminal
+
+Claudegram drives Claude through the Agent SDK, so **every Telegram conversation is a native Claude session** on disk (`~/.claude/projects/…`) — the same format the `claude` CLI uses. You can move between your phone and your terminal on **one continuous thread**.
+
+**Telegram already sees the terminal.** The bot re-reads the session transcript on every message, so anything you just did in a terminal `claude` session is automatically in context on the next Telegram message.
+
+**Bringing sessions together (either direction):**
+- `/resume` and `/sessions` list sessions for the current project from **both** the bot and the terminal (`💬` Telegram · `🖥️` terminal), so you can jump onto a terminal-started session.
+- `/project`-ing into a folder that already has sessions offers a one-tap **Resume latest / Start new**.
+- `/teleport` gives you a `cd … && claude --resume <id>` to continue in a terminal — same thread, no fork.
+
+**Keeping a *running* terminal in sync** needs one command, because a live `claude` REPL never reloads its own transcript:
+
+- **In Telegram:** `/sync` re-attaches the bot to the project's newest session (whether the terminal continued or forked) and reports if a terminal recently used it.
+- **In the terminal:** `/sync` pulls in the turns you sent via Telegram since you last synced.
+
+### Installing the terminal `/sync` command
+
+It ships in this repo at `.claude/commands/sync.md` (works when your terminal is in this project). To make `/sync` available in **any** project, install it globally — replace the path with your checkout:
+
+```bash
+mkdir -p ~/.claude/commands
+cat > ~/.claude/commands/sync.md <<'EOF'
+---
+description: Pull in Telegram turns for this session
+allowed-tools: Bash
+---
+Silently incorporate the exchanges below (they happened via Telegram on this same session). Do not reply unless I ask.
+
+!`node "/absolute/path/to/claudegram/scripts/claudegram-sync.mjs" pull --session ${CLAUDE_SESSION_ID}`
+EOF
+```
+
+Requires Claude Code v2.1.196+ (for the `${CLAUDE_SESSION_ID}` substitution).
+
+> `/sync` is a **soft reconciliation** — it injects the missing turns as context; it does not merge the underlying transcript tree. Avoid driving both sides at the exact same time.
+
+### Running multiple projects at once
+
+Every Telegram **chat or forum topic is an independent lane** — its own project, its own Claude session, and its own `/sync` with its own terminal. Open a forum topic per project and drive them **simultaneously**: the bot processes each concurrently and keeps their sessions fully isolated (state is keyed per chat/topic, and each sidecar per native session id). The model is **one project per chat/topic** — `/sync` will not hijack a session another chat is actively driving.
 
 ---
 
@@ -149,10 +195,11 @@ Open your bot in Telegram → `/start`
 | `/newproject <name>` | Create and switch to a new project |
 | `/clear` | Clear conversation + session |
 | `/status` | Current session info |
-| `/sessions` | List saved sessions |
-| `/resume` | Pick from recent sessions |
+| `/sessions` | List saved sessions (bot + terminal, for the current project) |
+| `/resume` | Pick from recent sessions (bot + terminal); `/resume <id>` imports a session by id |
 | `/continue` | Resume most recent session |
-| `/teleport` | Move session to terminal (forked) |
+| `/sync` | Sync with the terminal — re-attach to the project's newest session |
+| `/teleport` | Move session to terminal (same continuous thread) |
 
 ### Agent Modes
 | Command | Description |
@@ -160,7 +207,7 @@ Open your bot in Telegram → `/start`
 | `/plan` | Plan mode for complex tasks |
 | `/explore` | Explore codebase to answer questions |
 | `/loop` | Run iteratively until task complete |
-| `/model` | Switch Sonnet / Opus / Haiku |
+| `/model` | Switch model — Opus / Sonnet / Haiku, plus 1M-context `opus[1m]` / `sonnet[1m]` |
 | `/mode` | Toggle streaming / wait |
 | `/terminalui` | Toggle terminal-style display |
 
@@ -272,6 +319,7 @@ All config lives in `.env`. See [`.env.example`](.env.example) for the full anno
 | `ANTHROPIC_API_KEY` | — | API key (optional with Claude Max subscription) |
 | `WORKSPACE_DIR` | `$HOME` | Root directory for project picker |
 | `CLAUDE_EXECUTABLE_PATH` | `claude` | Path to Claude Code CLI |
+| `CLAUDE_MODEL` | *(inherit `settings.json`)* | Default model — alias, full id, or 1M suffix (`opus[1m]`). Unset = match your terminal; `/model` overrides per chat |
 | `BOT_NAME` | `Claudegram` | Bot name in system prompt |
 | `STREAMING_MODE` | `streaming` | `streaming` or `wait` |
 | `DANGEROUS_MODE` | `false` | Auto-approve all tool permissions |
@@ -337,7 +385,8 @@ src/
 │   ├── mcp-tools.ts              # MCP server: Reddit, Medium, Extract, Telegraph tools
 │   ├── session-manager.ts         # Per-chat session state
 │   ├── session-history.ts         # Session persistence and history
-│   ├── request-queue.ts           # Sequential request queue
+│   ├── sync-log.ts                # Bot→terminal /sync sidecar (~/.claudegram/sync)
+│   ├── request-queue.ts           # Per-chat sequential request queue
 │   ├── command-parser.ts          # Help text + command descriptions
 │   └── agent-watchdog.ts          # Watchdog for long-running agent tasks
 ├── reddit/
@@ -369,6 +418,7 @@ src/
 │   ├── file-type.ts               # File content validation
 │   ├── caffeinate.ts              # macOS sleep prevention
 │   ├── session-key.ts             # Session key generation (DM + forum topics)
+│   ├── claude-sessions.ts         # Read native ~/.claude sessions + CLI presence
 │   ├── agent-timer.ts             # Agent execution timing
 │   └── debug-agent.ts             # Debug utilities
 ├── config.ts                      # Zod-validated environment config
