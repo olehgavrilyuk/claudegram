@@ -57,7 +57,7 @@ import { execFile, spawn } from 'child_process';
 import { sanitizeError, sanitizePath } from '../../utils/sanitize.js';
 import { getWorkspaceRoot, isPathWithinRoot } from '../../utils/workspace-guard.js';
 import { getSessionKeyFromCtx, parseSessionKey } from '../../utils/session-key.js';
-import { listNativeSessions, findSessionOnDisk, findActiveProcess, samePath } from '../../utils/claude-sessions.js';
+import { listNativeSessions, findSessionOnDisk, findActiveProcess, findBusyTerminal, samePath } from '../../utils/claude-sessions.js';
 
 // Helper for consistent MarkdownV2 replies
 async function replyMd(ctx: Context, text: string): Promise<void> {
@@ -1471,6 +1471,8 @@ export async function handlePlan(ctx: Context): Promise<void> {
     return;
   }
 
+  if (await warnIfTerminalBusy(ctx, sessionKey)) return;
+
   try {
     await queueRequest(sessionKey, task, async () => {
       await messageSender.startStreaming(ctx);
@@ -1529,6 +1531,8 @@ export async function handleExplore(ctx: Context): Promise<void> {
     );
     return;
   }
+
+  if (await warnIfTerminalBusy(ctx, sessionKey)) return;
 
   try {
     await queueRequest(sessionKey, question, async () => {
@@ -1851,6 +1855,8 @@ export async function handleLoop(ctx: Context): Promise<void> {
     return;
   }
 
+  if (await warnIfTerminalBusy(ctx, sessionKey)) return;
+
   try {
     await queueRequest(sessionKey, task, async () => {
       await messageSender.startStreaming(ctx);
@@ -1934,6 +1940,25 @@ export async function handleSessions(ctx: Context): Promise<void> {
  * session for the current project (handles the terminal continuing OR forking to
  * a new id) and reports whether a terminal currently has it open.
  */
+/**
+ * If a human terminal REPL is actively mid-turn on this chat's session, tell the
+ * user to wait and return true (caller should abort). Prevents driving both sides
+ * at once, which would branch the shared thread. Returns false when safe to proceed.
+ */
+export async function warnIfTerminalBusy(ctx: Context, sessionKey: string): Promise<boolean> {
+  const session = sessionManager.getSession(sessionKey);
+  const sid = session?.claudeSessionId;
+  if (!sid) return false;
+  const busy = findBusyTerminal(sid);
+  if (!busy) return false;
+  await replyMd(
+    ctx,
+    '⏳ *The terminal is working on this session right now\\.*\n\n' +
+    'Driving both sides at once branches the thread — wait for it to finish, then send your message again \\(its result gets pulled in automatically\\)\\.'
+  );
+  return true;
+}
+
 export async function handleSync(ctx: Context): Promise<void> {
   const keyInfo = getSessionKeyFromCtx(ctx);
   if (!keyInfo) return;
@@ -2537,6 +2562,7 @@ export async function handleRedditActionCallback(ctx: Context): Promise<void> {
         prompt += '\n\nPlease summarize the key points and let me know if you have any questions.';
 
         // 3. Queue a streaming response
+        if (await warnIfTerminalBusy(ctx, sessionKey)) return;
         try {
           await queueRequest(sessionKey, prompt, async () => {
             if (getStreamingMode() === 'streaming') {

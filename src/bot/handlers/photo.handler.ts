@@ -14,7 +14,7 @@ import {
   setAbortController,
 } from '../../claude/request-queue.js';
 import { escapeMarkdownV2 as esc } from '../../telegram/markdown.js';
-import { getStreamingMode } from './command.handler.js';
+import { getStreamingMode, warnIfTerminalBusy } from './command.handler.js';
 import { downloadFileSecure, getTelegramFileUrl } from '../../utils/download.js';
 import { sanitizeError } from '../../utils/sanitize.js';
 import { isValidImageFile, getFileType } from '../../utils/file-type.js';
@@ -95,6 +95,8 @@ async function handleSavedImage(
   const imageBase64 = fs.readFileSync(savedPath).toString('base64');
   const mediaType = getMediaType(savedPath);
   const images = [{ data: imageBase64, mediaType }];
+
+  if (await warnIfTerminalBusy(ctx, sessionKey)) return;
 
   if (isProcessing(sessionKey)) {
     const position = getQueuePosition(sessionKey) + 1;
