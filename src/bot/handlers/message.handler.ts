@@ -16,7 +16,7 @@ import {
 import { isClaudeCommand } from '../../claude/command-parser.js';
 import { escapeMarkdownV2 as esc } from '../../telegram/markdown.js';
 import { createTelegraphFromFile } from '../../telegram/telegraph.js';
-import { getStreamingMode, executeRedditFetch, executeMediumFetch, showExtractMenu, projectStatusSuffix, resumeCommandMessage, maybeOfferResume } from './command.handler.js';
+import { getStreamingMode, executeRedditFetch, executeMediumFetch, showExtractMenu, projectStatusSuffix, resumeCommandMessage, maybeOfferResume, warnIfTerminalBusy } from './command.handler.js';
 import { executeVReddit } from '../../reddit/vreddit.js';
 import { detectPlatform, isValidUrl } from '../../media/extract.js';
 import { maybeSendVoiceReply } from '../../tts/voice-reply.js';
@@ -269,6 +269,10 @@ export async function handleMessage(ctx: Context): Promise<void> {
     return;
   }
 
+  // Don't start a turn while a terminal REPL is mid-turn on the same session —
+  // that would branch the shared thread. Ask the user to wait instead.
+  if (await warnIfTerminalBusy(ctx, sessionKey)) return;
+
   // If CANCEL_ON_NEW_MESSAGE is enabled, auto-cancel the running query;
   // otherwise queue the new message behind it and show the queue position.
   if (isProcessing(sessionKey)) {
@@ -433,6 +437,8 @@ async function handleAgentReply(
     );
     return;
   }
+
+  if (await warnIfTerminalBusy(ctx, sessionKey)) return;
 
   try {
     await queueRequest(sessionKey, trimmedInput, async () => {

@@ -15,7 +15,7 @@ import {
   setAbortController,
 } from '../../claude/request-queue.js';
 import { escapeMarkdownV2 as esc } from '../../telegram/markdown.js';
-import { getStreamingMode } from './command.handler.js';
+import { getStreamingMode, warnIfTerminalBusy } from './command.handler.js';
 import { maybeSendVoiceReply } from '../../tts/voice-reply.js';
 import { transcribeFile } from '../../audio/transcribe.js';
 import { sendTranscriptResult } from './command.handler.js';
@@ -132,6 +132,9 @@ export async function handleVoice(ctx: Context): Promise<void> {
         console.debug('[Voice] Failed to delete ack message:', e instanceof Error ? e.message : e);
       }
     }
+
+    // Don't collide with a terminal REPL mid-turn on the same session.
+    if (await warnIfTerminalBusy(ctx, sessionKey)) return;
 
     // Check if already processing - show queue position
     if (isProcessing(sessionKey)) {

@@ -309,6 +309,72 @@ export function findActiveProcess(
   return matches[0];
 }
 
+/** Cross-platform "is this pid running?" — signal 0 probes existence without signaling. */
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH = no such process (dead). EPERM = exists but not ours (alive).
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * Is a human's interactive terminal REPL *actively mid-turn* on this session?
+ *
+ * Unlike findActiveProcess (which uses the stale `updatedAt` "recently active"
+ * window), this keys off the presence file's live `status:"busy"` — set while the
+ * CLI is processing a turn and flipped back to `"idle"` when done (CLI v2.1.196+).
+ * It is gated by an actual pid-liveness check so a crashed REPL stuck at "busy"
+ * doesn't register. The `kind:"interactive"` + `entrypoint:"cli"` filter means the
+ * bot's own headless SDK subprocess never matches — so the bot can't block itself.
+ *
+ * Returns the busy terminal process, or undefined. Undocumented format → defensive.
+ */
+export function findBusyTerminal(sessionId: string): ActiveProcess | undefined {
+  if (!sessionId) return undefined;
+  const dir = path.join(os.homedir(), '.claude', 'sessions');
+  if (!fs.existsSync(dir)) return undefined;
+
+  let files: string[];
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+  } catch {
+    return undefined;
+  }
+
+  for (const file of files) {
+    let p: Record<string, unknown>;
+    try {
+      p = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf-8'));
+    } catch {
+      continue;
+    }
+    if (p.sessionId !== sessionId) continue;
+    if (p.status !== 'busy') continue;
+    if (p.kind !== 'interactive' || p.entrypoint !== 'cli') continue; // human REPL only
+    if (typeof p.pid !== 'number' || p.pid === process.pid) continue;  // never ourselves
+    if (!isProcessAlive(p.pid)) continue;                              // reject crashed-busy
+
+    const statusUpdatedAt = typeof p.statusUpdatedAt === 'number'
+      ? p.statusUpdatedAt
+      : (typeof p.updatedAt === 'number' ? p.updatedAt : 0);
+    return {
+      pid: p.pid,
+      sessionId: typeof p.sessionId === 'string' ? p.sessionId : undefined,
+      cwd: typeof p.cwd === 'string' ? p.cwd : undefined,
+      kind: 'interactive',
+      entrypoint: 'cli',
+      status: 'busy',
+      name: typeof p.name === 'string' ? p.name : undefined,
+      updatedAt: statusUpdatedAt,
+    };
+  }
+  return undefined;
+}
+
 /**
  * Locate a specific session transcript by id and return its working directory.
  */
