@@ -29,6 +29,7 @@ import {
 } from '../utils/agent-timer.js';
 import { userPreferences } from '../providers/user-preferences.js';
 import { BoundedMap } from '../utils/bounded-map.js';
+import { appendSyncTurn } from './sync-log.js';
 
 import type { AgentUsage, AgentResponse, AgentOptions, LoopOptions, ImageAttachment } from '../providers/types.js';
 export type { AgentUsage };
@@ -335,8 +336,18 @@ export async function sendToAgent(
   // Log in dangerous mode for security auditing
   logDangerousModeOperation(sessionKey, 'query', `prompt_length:${message.length} cwd:${session.workingDirectory}`);
 
-  // Determine model to use (default to 'opus' to match getModel() default)
-  const effectiveModel = model || chatModels.get(sessionKey) || 'opus';
+  // Determine model. Priority: explicit per-call > per-chat preference
+  // (in-memory or persisted) > CLAUDE_MODEL env. If none, leave it undefined so
+  // the SDK inherits the model from ~/.claude/settings.json (via settingSources).
+  // This keeps the bot on the SAME model + context window the terminal uses
+  // (e.g. a 1M "[1m]" model), so resuming a large session doesn't overflow a
+  // forced 200K default with "Prompt is too long".
+  const numericChatId = parseInt(sessionKey, 10);
+  const effectiveModel =
+    model
+    || chatModels.get(sessionKey)
+    || (Number.isNaN(numericChatId) ? undefined : userPreferences.getModel(numericChatId))
+    || config.CLAUDE_MODEL;
 
   // Initialize timer for tracking query duration (watchdog created inside try with controller)
   const timer = createAgentTimer();
@@ -467,7 +478,8 @@ export async function sendToAgent(
         append: SYSTEM_PROMPT,
       },
       settingSources: ['project', 'user'] as SettingSource[],
-      model: effectiveModel,
+      // Omit when undefined so the SDK falls back to ~/.claude/settings.json.
+      ...(effectiveModel ? { model: effectiveModel } : {}),
       resume: existingSessionId,
       ...(permissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
       ...(config.CLAUDE_USE_BUNDLED_EXECUTABLE ? {} : { pathToClaudeCodeExecutable: config.CLAUDE_EXECUTABLE_PATH }),
@@ -610,7 +622,7 @@ export async function sendToAgent(
           }
         }
 
-        if (responseMessage.subtype === 'success') {
+        if (responseMessage.subtype === 'success' && !responseMessage.is_error) {
           // Only store session_id on successful results (not on error_during_execution)
           if ('session_id' in responseMessage && responseMessage.session_id) {
             chatSessionIds.set(sessionKey, responseMessage.session_id);
@@ -626,21 +638,64 @@ export async function sendToAgent(
             fullText += responseMessage.result;
             onProgress?.(fullText);
           }
-        } else if (responseMessage.subtype === 'error_during_execution' && isCancelled(sessionKey)) {
-          // Interrupted via /cancel - show clean cancellation message
-          fullText = '✅ Successfully cancelled - no tools or agents in process.';
-          onProgress?.(fullText);
-        } else {
-          // error_max_turns or unexpected error_during_execution
-          // Clear stale session ID so next attempt starts fresh
+        } else if (responseMessage.subtype === 'success' && responseMessage.is_error) {
+          // The SDK returns subtype 'success' with is_error:true for API-level
+          // failures (e.g. "Prompt is too long" when a resumed session overflows
+          // the context window). Don't pass the error text off as Claude's answer,
+          // and clear the session so the next message auto-recovers with a fresh
+          // one. Clearing the id also skips the sync-sidecar write below.
           chatSessionIds.delete(sessionKey);
           const session = sessionManager.getSession(sessionKey);
           if (session) {
             session.claudeSessionId = undefined;
           }
-          logAt('basic', `[Claude] Cleared stale session for session ${sessionKey} due to ${responseMessage.subtype}`);
+          const errText = responseMessage.result || 'Unknown error';
+          logAt('basic', `[Claude] Result error (is_error) for session ${sessionKey}: ${errText}`);
+          fullText = /too long|context/i.test(errText)
+            ? "⚠️ This conversation hit Claude's context limit, so I've started a fresh session for this project. Your earlier messages are safe — resend your last message, or use /clear."
+            : `⚠️ ${errText}`;
+          onProgress?.(fullText);
+        } else if (responseMessage.subtype === 'error_during_execution' && isCancelled(sessionKey)) {
+          // Interrupted via /cancel - show clean cancellation message
+          fullText = '✅ Successfully cancelled - no tools or agents in process.';
+          onProgress?.(fullText);
+        } else {
+          // Any other result error (SDKResultError): max_turns, max_budget,
+          // structured-output retries, or an unexpected execution error.
+          const subtype = responseMessage.subtype;
+          const recoverable = subtype === 'error_max_turns' || subtype === 'error_max_budget_usd';
+          const details = ('errors' in responseMessage && Array.isArray(responseMessage.errors) && responseMessage.errors.length)
+            ? responseMessage.errors.join('; ')
+            : '';
 
-          fullText = `Error: ${responseMessage.subtype}`;
+          if (recoverable) {
+            // The session is intact — just capped. Keep it resumable so the user
+            // can send "continue" and pick up exactly where Claude left off.
+            if ('session_id' in responseMessage && responseMessage.session_id) {
+              chatSessionIds.set(sessionKey, responseMessage.session_id);
+              sessionManager.setClaudeSessionId(sessionKey, responseMessage.session_id);
+            }
+          } else {
+            // Unexpected error — reset so the next message starts fresh.
+            chatSessionIds.delete(sessionKey);
+            const session = sessionManager.getSession(sessionKey);
+            if (session) {
+              session.claudeSessionId = undefined;
+            }
+          }
+          logAt('basic', `[Claude] Result error for session ${sessionKey}: ${subtype}${details ? ` — ${details}` : ''}`);
+
+          const notice =
+            subtype === 'error_max_turns'
+              ? '⚠️ I reached my step limit for a single request before finishing. Send "continue" and I\'ll pick up where I left off — or break the task into smaller steps.'
+              : subtype === 'error_max_budget_usd'
+                ? '⚠️ This request hit its cost limit before finishing. Send "continue" to keep going.'
+                : details
+                  ? `⚠️ Something went wrong while running that:\n${details}\n\nI've reset this session — please try again.`
+                  : "⚠️ Something went wrong while running that request. I've reset this session — please try again, or use /clear.";
+
+          // Preserve any work already streamed; append the notice rather than replace.
+          fullText = fullText.trim() ? `${fullText}\n\n${notice}` : notice;
           onProgress?.(fullText);
         }
       }
@@ -681,6 +736,16 @@ export async function sendToAgent(
   // Cache usage for /context and /status commands
   if (resultUsage) {
     chatUsageCache.set(sessionKey, resultUsage);
+  }
+
+  // Record this exchange to the cross-process sync sidecar so the terminal's
+  // `/sync` command can replay it into a live CLI session. Best-effort only.
+  const syncedSessionId = chatSessionIds.get(sessionKey);
+  if (syncedSessionId && fullText && !abortController?.signal.aborted && !isCancelled(sessionKey)) {
+    appendSyncTurn(syncedSessionId, {
+      user: message,
+      assistant: stripReasoningSummary(fullText),
+    });
   }
 
   return {

@@ -1727,8 +1727,13 @@
           </div>
           <div class="feature-card" data-category="session">
             <div class="feature-icon">🚀</div>
-            <h3>Teleport to Terminal</h3>
-            <p>Move your conversation from Telegram to a terminal session with /teleport. Fork and continue in both places.</p>
+            <h3>Teleport Both Ways</h3>
+            <p>Native <code>~/.claude</code> sessions are shared: continue in the terminal with /teleport, or pull a terminal session into Telegram with /resume — one continuous thread, no forking.</p>
+          </div>
+          <div class="feature-card" data-category="session">
+            <div class="feature-icon">🔄</div>
+            <h3>One-Command Sync</h3>
+            <p>Run /sync on either side to reconcile: Telegram re-attaches to the newest session, and the terminal pulls in turns you sent from your phone — no restart needed.</p>
           </div>
           <div class="feature-card" data-category="session">
             <div class="feature-icon">📌</div>
@@ -1832,8 +1837,8 @@
           </h3>
           <div class="commands-grid">
             <div class="command-row">
-              <code class="command-code">/resume</code>
-              <span class="command-desc">Resume the last session for current project</span>
+              <code class="command-code">/resume [id]</code>
+              <span class="command-desc">Resume a session for this project (Telegram + terminal), or import one by id</span>
             </div>
             <div class="command-row">
               <code class="command-code">/continue</code>
@@ -1841,11 +1846,15 @@
             </div>
             <div class="command-row">
               <code class="command-code">/sessions</code>
-              <span class="command-desc">Browse and restore previous sessions</span>
+              <span class="command-desc">Browse previous sessions, including terminal ones</span>
+            </div>
+            <div class="command-row">
+              <code class="command-code">/sync</code>
+              <span class="command-desc">Reconcile with the terminal (re-attach to newest session)</span>
             </div>
             <div class="command-row">
               <code class="command-code">/teleport</code>
-              <span class="command-desc">Move session to terminal (forked)</span>
+              <span class="command-desc">Continue in the terminal (same continuous thread)</span>
             </div>
           </div>
         </div>
@@ -1862,7 +1871,7 @@
             </div>
             <div class="command-row">
               <code class="command-code">/model</code>
-              <span class="command-desc">Switch AI model (provider-aware)</span>
+              <span class="command-desc">Switch AI model, incl. 1M-context opus[1m] / sonnet[1m]</span>
             </div>
             <div class="command-row">
               <code class="command-code">/mode</code>

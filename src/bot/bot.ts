@@ -5,6 +5,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { config } from '../config.js';
 import { buildSessionKey } from '../utils/session-key.js';
 import { authMiddleware } from './middleware/auth.middleware.js';
+import { isProcessing } from '../claude/request-queue.js';
 import {
   handleStart,
   handleClear,
@@ -37,7 +38,10 @@ import {
   handleContinue,
   handleLoop,
   handleSessions,
+  handleSync,
   handleTeleport,
+  handleTeleportInCallback,
+  handleResumeNewCallback,
   handleFile,
   handleReddit,
   handleVReddit,
@@ -120,6 +124,7 @@ export async function createBot(): Promise<Bot> {
     { command: 'explore', description: '🔍 Explore codebase' },
     { command: 'loop', description: '🔄 Run in loop mode' },
     { command: 'sessions', description: '📚 View saved sessions' },
+    { command: 'sync', description: '🔄 Sync with terminal session' },
     { command: 'teleport', description: '🚀 Move session to terminal' },
     ...(config.REDDIT_ENABLED ? [{ command: 'reddit', description: '📡 Fetch Reddit posts & subreddits' }] : []),
     ...(config.VREDDIT_ENABLED ? [{ command: 'vreddit', description: '🎬 Download Reddit video from post URL' }] : []),
@@ -152,6 +157,21 @@ export async function createBot(): Promise<Bot> {
   bot.command('softreset', handleReset);
   bot.command('ping', handlePing);
 
+  // /sync runs AFTER sequentialize, so if a turn is in flight it is queued behind
+  // it and won't respond until it finishes. Acknowledge immediately here — BEFORE
+  // sequentialize — when the chat is busy, then fall through to the real handler.
+  bot.command('sync', async (ctx, next) => {
+    const key = getSequentializeKey(ctx);
+    if (key && isProcessing(key)) {
+      try {
+        await ctx.reply("⏳ Finishing the current turn first, then I'll sync…");
+      } catch {
+        // Non-fatal: proceed to the real handler regardless of the ack.
+      }
+    }
+    await next();
+  });
+
   // Sequentialize: same-chat updates are processed in order.
   // This runs AFTER /cancel so cancel bypasses it.
   bot.use(sequentialize(getSequentializeKey));
@@ -181,11 +201,12 @@ export async function createBot(): Promise<Bot> {
   bot.command('resume', handleResume);
   bot.command('continue', handleContinue);
   bot.command('sessions', handleSessions);
+  bot.command('sync', handleSync);
 
   // Loop mode
   bot.command('loop', handleLoop);
 
-  // Teleport to terminal
+  // Teleport current session out to a terminal
   bot.command('teleport', handleTeleport);
 
   // File commands
@@ -245,6 +266,10 @@ export async function createBot(): Promise<Bot> {
       await handleRestartCallback(ctx);
     } else if (data.startsWith('reset:')) {
       await handleResetCallback(ctx);
+    } else if (data.startsWith('teleportin:')) {
+      await handleTeleportInCallback(ctx);
+    } else if (data.startsWith('resumenew:')) {
+      await handleResumeNewCallback(ctx);
     }
   });
 

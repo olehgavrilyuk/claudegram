@@ -16,7 +16,7 @@ import {
 import { isClaudeCommand } from '../../claude/command-parser.js';
 import { escapeMarkdownV2 as esc } from '../../telegram/markdown.js';
 import { createTelegraphFromFile } from '../../telegram/telegraph.js';
-import { getStreamingMode, executeRedditFetch, executeMediumFetch, showExtractMenu, projectStatusSuffix, resumeCommandMessage } from './command.handler.js';
+import { getStreamingMode, executeRedditFetch, executeMediumFetch, showExtractMenu, projectStatusSuffix, resumeCommandMessage, maybeOfferResume } from './command.handler.js';
 import { executeVReddit } from '../../reddit/vreddit.js';
 import { detectPlatform, isValidUrl } from '../../media/extract.js';
 import { maybeSendVoiceReply } from '../../tts/voice-reply.js';
@@ -353,6 +353,8 @@ async function handleProjectReply(ctx: Context, sessionKey: string, projectPath:
   if (s?.claudeSessionId) {
     await ctx.reply(resumeCommandMessage(s.claudeSessionId), { parse_mode: 'MarkdownV2' });
   }
+
+  await maybeOfferResume(ctx, sessionKey, resolvedPath);
 }
 
 // Handle reply to file ForceReply prompt

@@ -25,6 +25,11 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   WORKSPACE_DIR: z.string().default(process.env.HOME || '.'),
   CLAUDE_EXECUTABLE_PATH: z.string().default('claude'),
+  // Default Claude model for the bot. Supports aliases (opus/sonnet/haiku), full
+  // ids, and the 1M-context suffix (e.g. "opus[1m]"). If unset, the bot inherits
+  // the model from ~/.claude/settings.json — matching the terminal, so resuming a
+  // large session doesn't overflow a smaller default. A per-chat /model overrides.
+  CLAUDE_MODEL: z.string().optional(),
   CLAUDE_USE_BUNDLED_EXECUTABLE: z
     .string()
     .default('true')
