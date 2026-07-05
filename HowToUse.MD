@@ -142,13 +142,14 @@ Bot:  (Claude produces a step-by-step plan without editing files)
 
 | Command | Effect |
 |---------|--------|
-| `/model` | Show/switch model — **Opus** · **Sonnet** · **Haiku** |
+| `/model` | Show/switch model — **Opus** · **Sonnet** · **Haiku**, plus 1M-context **`opus[1m]`** / **`sonnet[1m]`** |
 | `/mode` | Toggle **streaming** (live-updating) vs **wait** (single reply) |
 | `/terminalui` | Toggle terminal-style display with tool spinners |
 | `/telegraph` | Toggle Telegraph Instant View for long responses/tables |
+| `/provider` | Switch AI backend — **Claude** or **OpenCode** (only if `OPENCODE_ENABLED`) |
 | `/tts` | Toggle spoken voice replies and pick a voice |
 
-These are per-chat/topic, so each project can have its own model and display style.
+These are per-chat/topic, so each project can have its own model and display style. By default the bot inherits the model from your `~/.claude/settings.json` (same as your terminal); pick a 1M variant — or set `CLAUDE_MODEL` in `.env` — when resuming very large sessions.
 
 ---
 
@@ -189,7 +190,7 @@ Some of these are gated by `.env` flags/keys — see the [README integrations](R
 Getting started   /start  /project  /newproject  /status  /clear  /commands
 Sessions          /sessions  /resume  /continue  /sync  /teleport
 Agent modes       /plan  /explore  /loop
-Settings          /model  /mode  /terminalui  /telegraph  /tts
+Settings          /model  /mode  /provider  /terminalui  /telegraph  /tts
 Content           /file  /reddit  /vreddit  /medium  /extract  /transcribe
 Control           /cancel  /softreset  /context  /botstatus  /restartbot  /ping
 ```

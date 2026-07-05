@@ -99,6 +99,11 @@ This is not a simple API wrapper. It's the real Claude Code agent with tool acce
 - Saved to project under `.claudegram/uploads/`
 - Claude is notified with path + caption
 
+### Provider Switching (optional)
+- `/provider` switches a chat between Claude and OpenCode
+- OpenCode fronts 75+ LLM providers
+- Enable with `OPENCODE_ENABLED`
+
 </td>
 </tr>
 </table>
@@ -210,6 +215,7 @@ Open your bot in Telegram → `/start`
 | `/model` | Switch model — Opus / Sonnet / Haiku, plus 1M-context `opus[1m]` / `sonnet[1m]` |
 | `/mode` | Toggle streaming / wait |
 | `/terminalui` | Toggle terminal-style display |
+| `/provider` | Switch AI backend — Claude or OpenCode (only when `OPENCODE_ENABLED`) |
 
 ### Content
 | Command | Description |
@@ -299,6 +305,23 @@ TTS_RESPONSE_FORMAT=opus
 
 </details>
 
+<details>
+<summary><strong>OpenCode — <code>/provider</code></strong></summary>
+
+Optional alternative backend. When enabled, `/provider` switches a chat between **Claude** (the default Agent SDK backend) and **OpenCode**, which fronts 75+ LLM providers. Switching a chat clears its model so you can pick one with `/model`.
+
+```bash
+# .env
+OPENCODE_ENABLED=true
+# Optional: connect to a running server instead of the embedded one
+# OPENCODE_BASE_URL=http://localhost:4096
+# OPENCODE_PORT=4096
+```
+
+Requires [OpenCode](https://opencode.ai) installed. Session commands like `/sync` and `/teleport` are Claude-only and are skipped on the OpenCode provider.
+
+</details>
+
 ---
 
 ## Configuration Reference
@@ -363,6 +386,14 @@ All config lives in `.env`. See [`.env.example`](.env.example) for the full anno
 | `TTS_VOICE` | `coral` | Default TTS voice |
 | `TTS_MODEL` | `gpt-4o-mini-tts` | TTS model |
 | `VOICE_SHOW_TRANSCRIPT` | `true` | Show transcript text before agent response |
+
+### OpenCode (optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENCODE_ENABLED` | `false` | Enable `/provider` to switch between Claude and OpenCode |
+| `OPENCODE_BASE_URL` | — | URL of a running OpenCode server (else an embedded one starts) |
+| `OPENCODE_PORT` | `4096` | Port for the embedded OpenCode server |
 
 ---
 
