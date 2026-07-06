@@ -39,6 +39,7 @@ import {
   handleLoop,
   handleSessions,
   handleSync,
+  handleStopWait,
   handleTeleport,
   handleTeleportInCallback,
   handleResumeNewCallback,
@@ -125,6 +126,7 @@ export async function createBot(): Promise<Bot> {
     { command: 'loop', description: '🔄 Run in loop mode' },
     { command: 'sessions', description: '📚 View saved sessions' },
     { command: 'sync', description: '🔄 Sync with terminal session' },
+    { command: 'stopwait', description: '🛑 Stop waiting for the terminal' },
     { command: 'teleport', description: '🚀 Move session to terminal' },
     ...(config.REDDIT_ENABLED ? [{ command: 'reddit', description: '📡 Fetch Reddit posts & subreddits' }] : []),
     ...(config.VREDDIT_ENABLED ? [{ command: 'vreddit', description: '🎬 Download Reddit video from post URL' }] : []),
@@ -151,11 +153,12 @@ export async function createBot(): Promise<Bot> {
   // Apply auth middleware to all updates
   bot.use(authMiddleware);
 
-  // /cancel, /reset, and /ping fire BEFORE sequentialize so they bypass per-chat ordering.
-  // This lets them interrupt a running query without waiting for it to finish.
+  // /cancel, /reset, /ping, /stopwait fire BEFORE sequentialize so they bypass per-chat
+  // ordering — letting them interrupt/respond without waiting for a running query to finish.
   bot.command('cancel', handleCancel);
   bot.command('softreset', handleReset);
   bot.command('ping', handlePing);
+  bot.command('stopwait', handleStopWait);
 
   // /sync runs AFTER sequentialize, so if a turn is in flight it is queued behind
   // it and won't respond until it finishes. Acknowledge immediately here — BEFORE

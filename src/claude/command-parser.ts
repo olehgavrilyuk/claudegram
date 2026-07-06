@@ -63,6 +63,7 @@ export function getAvailableCommands(): string {
         '• `/continue` \\- Resume most recent session',
         '• `/sessions` \\- List all sessions',
         '• `/sync` \\- Sync with the terminal \\(pull its latest session\\)',
+        '• `/stopwait` \\- Stop waiting for a busy terminal to free up',
         '• `/teleport` \\- Move session to terminal \\(same thread\\)',
         '• `/clear` \\- Clear session and start fresh',
         '• `/status` \\- Show current session info',

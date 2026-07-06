@@ -147,6 +147,8 @@ Requires Claude Code v2.1.196+ (for the `${CLAUDE_SESSION_ID}` substitution).
 
 > `/sync` is a **soft reconciliation** — it injects the missing turns as context; it does not merge the underlying transcript tree. Avoid driving both sides at the exact same time.
 
+**Collision guard.** If the terminal is *mid-turn* on a session, the bot won't start a colliding turn from Telegram — it replies "the terminal is working…" and **pings you when it frees up**. Send `/stopwait` to cancel that ping.
+
 ### Running multiple projects at once
 
 Every Telegram **chat or forum topic is an independent lane** — its own project, its own Claude session, and its own `/sync` with its own terminal. Open a forum topic per project and drive them **simultaneously**: the bot processes each concurrently and keeps their sessions fully isolated (state is keyed per chat/topic, and each sidecar per native session id). The model is **one project per chat/topic** — `/sync` will not hijack a session another chat is actively driving.
@@ -204,6 +206,7 @@ Open your bot in Telegram → `/start`
 | `/resume` | Pick from recent sessions (bot + terminal); `/resume <id>` imports a session by id |
 | `/continue` | Resume most recent session |
 | `/sync` | Sync with the terminal — re-attach to the project's newest session |
+| `/stopwait` | Stop waiting for a busy terminal (cancels the "I'll ping you" watch) |
 | `/teleport` | Move session to terminal (same continuous thread) |
 
 ### Agent Modes

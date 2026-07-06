@@ -58,6 +58,7 @@ import { sanitizeError, sanitizePath } from '../../utils/sanitize.js';
 import { getWorkspaceRoot, isPathWithinRoot } from '../../utils/workspace-guard.js';
 import { getSessionKeyFromCtx, parseSessionKey } from '../../utils/session-key.js';
 import { listNativeSessions, findSessionOnDisk, findActiveProcess, findBusyTerminal, samePath } from '../../utils/claude-sessions.js';
+import { watchTerminalIdle, cancelTerminalWait } from '../../claude/terminal-watch.js';
 
 // Helper for consistent MarkdownV2 replies
 async function replyMd(ctx: Context, text: string): Promise<void> {
@@ -1954,9 +1955,24 @@ export async function warnIfTerminalBusy(ctx: Context, sessionKey: string): Prom
   await replyMd(
     ctx,
     '⏳ *The terminal is working on this session right now\\.*\n\n' +
-    'Driving both sides at once branches the thread — wait for it to finish, then send your message again \\(its result gets pulled in automatically\\)\\.'
+    'Driving both sides at once branches the thread — I will message you here the moment it is free \\(or /stopwait to skip\\)\\.'
   );
+  // Ping this chat once the terminal goes idle (only because a message was blocked).
+  const { chatId, threadId } = parseSessionKey(sessionKey);
+  watchTerminalIdle({ sessionKey, chatId, threadId, sessionId: sid, api: ctx.api });
   return true;
+}
+
+export async function handleStopWait(ctx: Context): Promise<void> {
+  const keyInfo = getSessionKeyFromCtx(ctx);
+  if (!keyInfo) return;
+  const cancelled = cancelTerminalWait(keyInfo.sessionKey);
+  await replyMd(
+    ctx,
+    cancelled
+      ? '🛑 Stopped waiting — no ping when the terminal frees up\\.'
+      : 'ℹ️ You are not waiting on the terminal right now\\.'
+  );
 }
 
 export async function handleSync(ctx: Context): Promise<void> {

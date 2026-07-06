@@ -58,6 +58,8 @@ This is the headline feature. Because the bot runs Claude through the Agent SDK,
 ### The golden rule
 Use **one side at a time**, and reconcile when you switch. Don't type in both simultaneously (that branches the conversation).
 
+The bot helps enforce this: if the **terminal** is mid-turn, a Telegram message is held with a "⏳ terminal is working" notice, and you get a **✅ ping when it frees up** (send `/stopwait` to cancel that ping).
+
 ### Terminal → Telegram (continue a CLI session on your phone)
 You were working in a terminal (`claude` in `~/code/myapp`) and want to continue from your phone:
 
@@ -179,8 +181,9 @@ Some of these are gated by `.env` flags/keys — see the [README integrations](R
 | `/restartbot` | Restart the bot process |
 | `/botstatus` | Show bot process status |
 | `/ping` | Quick "are you alive?" check |
+| `/stopwait` | Stop waiting for a busy terminal (cancels the "I'll ping you" watch) |
 
-`/cancel`, `/softreset`, and `/ping` work even while a request is running (they bypass the per-chat queue).
+`/cancel`, `/softreset`, `/ping`, and `/stopwait` work even while a request is running (they bypass the per-chat queue).
 
 ---
 
@@ -192,7 +195,7 @@ Sessions          /sessions  /resume  /continue  /sync  /teleport
 Agent modes       /plan  /explore  /loop
 Settings          /model  /mode  /provider  /terminalui  /telegraph  /tts
 Content           /file  /reddit  /vreddit  /medium  /extract  /transcribe
-Control           /cancel  /softreset  /context  /botstatus  /restartbot  /ping
+Control           /cancel  /softreset  /stopwait  /context  /botstatus  /restartbot  /ping
 ```
 
 Run `/commands` in the bot for the live, config-aware list.
