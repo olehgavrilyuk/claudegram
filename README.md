@@ -4,7 +4,6 @@
 
 **Your personal AI agent, running on your machine, controlled from Telegram.**
 
-[![Website](https://img.shields.io/badge/Website-claudegram.com-00ffd5?logo=googlechrome&logoColor=white)](https://claudegram.com)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Claude](https://img.shields.io/badge/Claude_Agent_SDK-Anthropic-cc785c?logo=anthropic&logoColor=white)](https://docs.anthropic.com/en/docs/claude-code)
 [![Telegram](https://img.shields.io/badge/Telegram_Bot-Grammy-26a5e4?logo=telegram&logoColor=white)](https://grammy.dev/)
@@ -169,7 +168,7 @@ Every Telegram **chat or forum topic is an independent lane** — its own projec
 ### Setup
 
 ```bash
-git clone https://github.com/NachoSEO/claudegram.git
+git clone https://github.com/olehgavrilyuk/claudegram.git
 cd claudegram
 cp .env.example .env
 ```
@@ -506,7 +505,9 @@ Then `/continue` or `/resume` in Telegram to restore your session.
 
 ## Credits
 
-Original project by [NachoSEO](https://github.com/NachoSEO/claudegram). Extended with Reddit video downloads, voice transcription, TTS, Medium integration, Telegraph output, image uploads, and session continuity.
+**Developer:** [Oleh Gavrilyuk](https://github.com/olehgavrilyuk) — native bot ⇄ terminal session unification (`/sync`), the terminal-busy collision guard with idle notifications (`/stopwait`), 1M-context model parity, and related session-continuity work.
+
+Originally created by [NachoSEO](https://github.com/NachoSEO/claudegram), with earlier community contributions including Reddit/video downloads, voice transcription, TTS, Medium integration, Telegraph output, and image uploads.
 
 ## License
 
